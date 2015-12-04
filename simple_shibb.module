@@ -1,0 +1,189 @@
+<?php
+
+ 
+
+function simple_shibb_init() {
+
+	$shib_session = _simple_shibb_get_session_username(); 
+	$drupal_session = user_is_logged_in();
+
+	if($drupal_session && !$shib_session) {
+
+		$force_logout = _simple_shibb_get_setting('logout_expired_sessions');
+		if($force_logout) {
+
+			_simple_shibb_do_logout();
+
+		}
+	}
+	
+	if($shib_session) {
+
+		_simple_shibb_do_login(); 
+	}
+
+
+}
+
+
+function simple_shibb_form_alter(&$form, &$form_state, $form_id) {
+
+	$login_text = _simple_shibb_get_setting('login_text'); 
+	$login_url = _simple_shibb_get_setting('login_url');
+
+	if (!empty($text) && $form_id === 'user_login') {
+
+		$form['simple_shibb'] = array(
+			'#type' => 'markup',
+			'#weight' => -20,
+			'#markup' => l(t($login_text), $login_url)
+		);
+
+	}
+
+}
+
+
+function _simple_shibb_do_logout() {
+
+	global $user; 
+	
+	$logout_url = _simple_shibb_get_setting('shibboleth_sp_logout_url'); 
+	module_invoke_all('user_logout', $user);
+	session_destroy();
+	drupal_goto($logout_url);
+
+}
+
+function _simple_shibb_do_login() {
+	
+	global $user; 
+	_simple_shibb_register_user(); 
+
+	$user = user_load_by_mail(_simple_shibb_get_session_email()); 
+	drupal_session_regenerate();
+
+}
+
+
+function _simple_shibb_register_user() {
+	
+	$session_username = _simple_shibb_get_session_username(); 
+	$session_email = _simple_shibb_get_session_email(); 
+
+	$drupal_user = user_load_by_mail($session_email);
+
+	// Existing accounts for email 
+	if($drupal_user->uid) {
+
+		$drupal_user->mail = $session_email; 
+		// Add or unset roles based on provider information 
+		$drupal_user->roles = array_merge($drupal_user->roles, _simple_shibb_get_session_roles()); 
+		user_save($drupal_user->uid, $drupal_user);
+
+	}
+
+	// New accounts 
+	else {
+		
+		$fields = array(
+			'name' => $session_username,
+			'mail' => $session_email,
+			'pass' => user_password(8),
+			'status' => 1,
+			'init' => 'email address',
+			'roles' => array(DRUPAL_AUTHENTICATED_RID => 'authenticated user',), 
+			),
+		);
+	
+		$field['roles'] += _simple_shibb_get_session_roles(); 
+	
+		$new_user = user_save('', $fields);
+		$new_user->password = $fields['pass'];
+	
+		drupal_mail('user', 'register_no_approval_required', $new_user->mail, NULL, array('account' => $new_user), variable_get('site_mail'));
+	}
+
+}
+
+
+function _simple_shibb_get_session_username() {
+
+	$field = _simple_shibb_get_setting('shibboleth_session_username_variable');
+	return $_SERVER[$field];
+	
+}
+
+
+function _simple_shibb_get_session_email() {
+
+	$field = _simple_shibb_get_setting('shibboleth_session_email_variable');
+	return $_SERVER[$field];
+	
+}
+
+
+function _simple_shibb_get_session_roles() {
+
+	$roles = array(
+		'test_one' => true,
+		);
+
+	return $roles; 
+	
+}
+
+
+function _simple_shibb_build_url($url) {
+
+	$options = array( 
+		'absolute' => true,
+		'alias' => false,
+		'https' => (_simple_shibb_get_setting('force_https_login') ? true : false),
+	);
+
+	return url($url, $options); 
+
+}
+
+
+function _simple_shibb_get_setting($field) {
+
+	$settings = _simple_shibb_load_settings(); 
+	
+	if($field === 'shibbolet_sp_login_url') {
+		return _simple_shibb_build_url($settings[$field]);
+	}
+	
+	if($field === 'shibboleth_sp_logout_url') {
+		return _simple_shibb_build_url($settings[$field]);
+	}
+
+	return $settings[$field]; 
+
+}
+
+
+function _simple_shibb_load_settings() {
+	
+	include('simple_shibb.settings.php'); 
+	$hosts = $settings['hosts']; 
+
+	if(!empty($hosts[$_SERVER['SERVER_NAME']]) {
+		return $hosts[$_SERVER['SERVER_NAME']]; 
+	}
+	
+	if(!empty($hosts[$_SERVER['SERVER_ADDR']]) {
+		return $hosts[$_SERVER['SERVER_ADDR']];
+	}
+	
+	if(!empty($hosts['*']) {
+		return $hosts['*'];
+	}
+
+	return array(); 
+
+}
+
+
+
